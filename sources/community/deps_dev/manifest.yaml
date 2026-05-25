@@ -1,0 +1,377 @@
+name: deps_dev
+version: 0.1.0
+dsl_version: 3
+backend: http
+description: >-
+  Query package metadata, dependency trees, and security advisories from the deps.dev API.
+base_url: https://api.deps.dev
+request_headers:
+  - name: Accept
+    from: literal
+    value: application/json
+test_queries:
+  - SELECT version, licenses, advisory_keys FROM deps_dev.versions WHERE system = 'NPM' AND package_name = 'minimist' AND version = '0.0.8' LIMIT 1
+  - SELECT versions FROM deps_dev.packages WHERE system = 'NPM' AND package_name = 'minimist' LIMIT 1
+  - SELECT dependency_name, dependency_version FROM deps_dev.dependencies WHERE system = 'NPM' AND package_name = 'minimist' AND version = '0.0.8' LIMIT 1
+  - SELECT title FROM deps_dev.advisories WHERE advisory_id = 'GHSA-vh95-rmgr-6w4m' LIMIT 1
+tables:
+  - name: versions
+    description: Metadata for one package version from deps.dev.
+    guide: >
+      Requires system, package_name, and version. Use this table to inspect
+      package version metadata such as licenses, advisory keys, upstream
+      projects, and registry links. Ensure package names are URL-encoded if
+      they contain slashes (for example, unscoped npm packages work natively).
+    filters:
+      - name: system
+        required: true
+      - name: package_name
+        required: true
+      - name: version
+        required: true
+    request:
+      method: GET
+      path: /v3/systems/{{filter.system}}/packages/{{filter.package_name}}/versions/{{filter.version}}
+    response:
+      row_strategy: direct
+    pagination:
+      mode: none
+    columns:
+      - name: system
+        type: Utf8
+        nullable: false
+        virtual: true
+        description: Requested package system, for example NPM, PYPI, MAVEN, GO, or CARGO.
+        expr:
+          kind: from_filter
+          key: system
+      - name: package_name
+        type: Utf8
+        nullable: false
+        virtual: true
+        description: Requested package name.
+        expr:
+          kind: from_filter
+          key: package_name
+      - name: version
+        type: Utf8
+        nullable: false
+        virtual: true
+        description: Requested package version.
+        expr:
+          kind: from_filter
+          key: version
+      - name: purl
+        type: Utf8
+        nullable: true
+        description: Package URL for this package version.
+        expr:
+          kind: path
+          path:
+            - purl
+      - name: published_at
+        type: Timestamp
+        nullable: true
+        description: Time the package version was published.
+        expr:
+          kind: format_timestamp
+          input: iso8601
+          expr:
+            kind: path
+            path:
+              - publishedAt
+      - name: is_default
+        type: Boolean
+        nullable: true
+        description: Whether deps.dev marks this as the default version.
+        expr:
+          kind: path
+          path:
+            - isDefault
+      - name: is_deprecated
+        type: Boolean
+        nullable: true
+        description: Whether the package version is deprecated.
+        expr:
+          kind: path
+          path:
+            - isDeprecated
+      - name: deprecated_reason
+        type: Utf8
+        nullable: true
+        description: Deprecation reason when available.
+        expr:
+          kind: path
+          path:
+            - deprecatedReason
+      - name: licenses
+        type: Json
+        nullable: true
+        description: License identifiers reported for this package version.
+        expr:
+          kind: path
+          path:
+            - licenses
+      - name: advisory_keys
+        type: Json
+        nullable: true
+        description: Advisory keys associated with this package version.
+        expr:
+          kind: path
+          path:
+            - advisoryKeys
+      - name: links
+        type: Json
+        nullable: true
+        description: Homepage, source repository, issue tracker, registry, and other links.
+        expr:
+          kind: path
+          path:
+            - links
+      - name: related_projects
+        type: Json
+        nullable: true
+        description: Upstream projects related to this package version.
+        expr:
+          kind: path
+          path:
+            - relatedProjects
+      - name: registries
+        type: Json
+        nullable: true
+        description: Package registries where this version is available.
+        expr:
+          kind: path
+          path:
+            - registries
+      - name: upstream_identifiers
+        type: Json
+        nullable: true
+        description: Upstream package/version identifiers known to deps.dev.
+        expr:
+          kind: path
+          path:
+            - upstreamIdentifiers
+      - name: raw
+        type: Json
+        nullable: false
+        description: Full raw deps.dev version object.
+        expr:
+          kind: current_row
+
+  - name: packages
+    description: Fetch package-level metadata (all versions) from deps.dev.
+    guide: >
+      Requires system and package_name. Use this table to inspect project-level
+      details, including the list of all available versions. Ensure package
+      names are URL-encoded if they contain slashes.
+    filters:
+      - name: system
+        required: true
+      - name: package_name
+        required: true
+    request:
+      method: GET
+      path: /v3/systems/{{filter.system}}/packages/{{filter.package_name}}
+    response:
+      row_strategy: direct
+    pagination:
+      mode: none
+    columns:
+      - name: system
+        type: Utf8
+        nullable: false
+        virtual: true
+        description: Requested system.
+        expr:
+          kind: from_filter
+          key: system
+      - name: package_name
+        type: Utf8
+        nullable: false
+        virtual: true
+        description: Requested package name.
+        expr:
+          kind: from_filter
+          key: package_name
+      - name: versions
+        type: Json
+        nullable: true
+        description: List of versions.
+        expr:
+          kind: path
+          path:
+            - versions
+      - name: raw
+        type: Json
+        nullable: false
+        description: Full package object.
+        expr:
+          kind: current_row
+
+  - name: dependencies
+    description: Fetch the resolved dependency graph for a package version.
+    guide: >
+      Requires system, package_name, and version. Returns the nodes in the
+      resolved dependency graph. Ensure package names are URL-encoded if they
+      contain slashes.
+    filters:
+      - name: system
+        required: true
+      - name: package_name
+        required: true
+      - name: version
+        required: true
+    request:
+      method: GET
+      path: /v3/systems/{{filter.system}}/packages/{{filter.package_name}}/versions/{{filter.version}}:dependencies
+    response:
+      rows_path:
+        - nodes
+      row_strategy: direct
+    pagination:
+      mode: none
+    columns:
+      - name: system
+        type: Utf8
+        nullable: false
+        virtual: true
+        description: Root package system.
+        expr:
+          kind: from_filter
+          key: system
+      - name: package_name
+        type: Utf8
+        nullable: false
+        virtual: true
+        description: Root package name.
+        expr:
+          kind: from_filter
+          key: package_name
+      - name: version
+        type: Utf8
+        nullable: false
+        virtual: true
+        description: Root package version.
+        expr:
+          kind: from_filter
+          key: version
+      - name: dependency_system
+        type: Utf8
+        nullable: true
+        description: Dependency system.
+        expr:
+          kind: path
+          path:
+            - versionKey
+            - system
+      - name: dependency_name
+        type: Utf8
+        nullable: true
+        description: Dependency package name.
+        expr:
+          kind: path
+          path:
+            - versionKey
+            - name
+      - name: dependency_version
+        type: Utf8
+        nullable: true
+        description: Dependency version.
+        expr:
+          kind: path
+          path:
+            - versionKey
+            - version
+      - name: relation
+        type: Utf8
+        nullable: true
+        description: Relationship (e.g. DIRECT or INDIRECT).
+        expr:
+          kind: path
+          path:
+            - relation
+      - name: errors
+        type: Json
+        nullable: true
+        description: Error logs and messages during dependency resolution.
+        expr:
+          kind: path
+          path:
+            - errors
+      - name: raw
+        type: Json
+        nullable: false
+        description: Full node object.
+        expr:
+          kind: current_row
+
+  - name: advisories
+    description: Fetch advisory details by advisory key.
+    guide: >
+      Requires advisory_id (e.g. OSV ID or GHSA). Use this table to fetch full advisory metadata.
+    filters:
+      - name: advisory_id
+        required: true
+    request:
+      method: GET
+      path: /v3/advisories/{{filter.advisory_id}}
+    response:
+      row_strategy: direct
+    pagination:
+      mode: none
+    columns:
+      - name: advisory_id
+        type: Utf8
+        nullable: false
+        virtual: true
+        description: Requested advisory ID.
+        expr:
+          kind: from_filter
+          key: advisory_id
+      - name: title
+        type: Utf8
+        nullable: true
+        description: Title of the advisory.
+        expr:
+          kind: path
+          path:
+            - title
+      - name: description
+        type: Utf8
+        nullable: true
+        description: Description of the advisory.
+        expr:
+          kind: path
+          path:
+            - description
+      - name: cvss3_score
+        type: Float64
+        nullable: true
+        description: CVSSv3 base score.
+        expr:
+          kind: path
+          path:
+            - cvss3Score
+      - name: cvss3_vector
+        type: Utf8
+        nullable: true
+        description: CVSSv3 vector.
+        expr:
+          kind: path
+          path:
+            - cvss3Vector
+      - name: aliases
+        type: Json
+        nullable: true
+        description: Advisory aliases.
+        expr:
+          kind: path
+          path:
+            - aliases
+      - name: raw
+        type: Json
+        nullable: false
+        description: Full advisory object.
+        expr:
+          kind: current_row
